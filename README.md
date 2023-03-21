@@ -23,7 +23,7 @@ Yet another JDBC connection pool
         } catch (SQLException e) {
             //handle exceptions here
         }
-        //connection will be closed and returned to the pool after curly brace above
+        //connection will be returned to the pool after curly brace above
         //...
         pool.stop();
 
