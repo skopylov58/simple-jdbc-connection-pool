@@ -1,5 +1,7 @@
 package com.github.skopylov58.jdbc.pool;
 
+import java.io.PrintWriter;
+import java.lang.System.Logger;
 import java.lang.System.Logger.Level;
 import java.sql.Array;
 import java.sql.Blob;
@@ -12,6 +14,7 @@ import java.sql.NClob;
 import java.sql.PreparedStatement;
 import java.sql.SQLClientInfoException;
 import java.sql.SQLException;
+import java.sql.SQLFeatureNotSupportedException;
 import java.sql.SQLWarning;
 import java.sql.SQLXML;
 import java.sql.Savepoint;
@@ -19,62 +22,91 @@ import java.sql.Statement;
 import java.sql.Struct;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.Properties;
 import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.DelayQueue;
+import java.util.concurrent.Delayed;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
+import javax.sql.DataSource;
+
+import com.github.skopylov58.jdbc.pool.JDBCConnectionPool.Orphanable;
 import com.github.skopylov58.retry.Retry;
 
-public class JDBCConnectionPool {
+public class JDBCConnectionPool implements DataSource {
     
-    private static final String NO_AVAILABLE_CONNECTIONS = "No available connections in the pool";
-    private int maxConnections = 10;
+    private static final String ERROR_CLOSING_CONNECTION = "Error closing connection";
+    private static final String NO_AVAILABLE_CONNECTIONS = "There are no available connections in the pool";
     
-    private RetryOptions poolRetryOptions = new RetryOptions(10, 1, TimeUnit.SECONDS);
-    private RetryOptions clientRetryOptions = new RetryOptions(10, 200, TimeUnit.MILLISECONDS);
-    
-    private boolean checkConnection = true;
-    int connectionValidationTimeOut = 10; //in seconds
+    private static final Logger logger = System.getLogger(JDBCConnectionPool.class.getName());
 
-    record foo(Instant inst, StackTraceElement[] stack) {};
-    
-    
-    private boolean checkOrphans = false;
-    private Duration orphanDuration = Duration.ofSeconds(30);
-    private ConcurrentHashMap<Connection, foo> orphaned;
-    private ScheduledExecutorService orpansWatchDog;
+    //Pool configuration parameters
+    public static class Config {
+        public int poolSize = 10;
+        
+        public int retryCount = 10;
+        public Duration retryDelay = Duration.ofSeconds(1);
+        
+        public  Duration clientTimeout = Duration.ofSeconds(10);
+        
+        public boolean validateConnectionOnCheckout = true;
+        public Duration connectionValidationTimeout = Duration.ofSeconds(10);
 
-//    String userName;
-//    String password;
+        public boolean detectOrphanConnections = false;
+        public Duration orphanTimeout = Duration.ofSeconds(30);
+    }
     
     private final String dbUrl;
-
+    private final Config config = new Config();
+    
     private BlockingQueue<PooledConnection> pool = new LinkedBlockingQueue<>();
+    private DelayQueue<Orphanable> checkedOut;
+    private ScheduledExecutorService orpansWatchDog;
     
     public JDBCConnectionPool(String url) {
         dbUrl = url;
     }
 
-    public JDBCConnectionPool(String url, int maxCon) {
-        this(url);
-        maxConnections = maxCon;
+    record Orphanable(PooledConnection connection,
+               Instant checkedOut,
+               Duration timeout,
+               StackTraceElement[] stackTrace)
+    implements Delayed
+    {
+        @Override
+        public int compareTo(Delayed other) {
+            return (this == other) ? 0 :
+            Long.compare(getDelay(TimeUnit.MICROSECONDS),other.getDelay(TimeUnit.MICROSECONDS));
+        }
+
+        @Override
+        public long getDelay(TimeUnit unit) {
+            var elapsed = Duration.between(checkedOut, Instant.now());
+            return unit.convert(timeout.minus(elapsed));
+        }
     }
 
     public void start() {
-        for (int i = 0; i < maxConnections; i++) {
+        for (int i = 0; i < config.poolSize; i++) {
             aquireDbConnection(dbUrl);
         }
-        if (checkOrphans) {
-            orphaned = new ConcurrentHashMap<>(maxConnections);
+        if (config.detectOrphanConnections) {
+            checkedOut = new DelayQueue<>();
             orpansWatchDog = Executors.newScheduledThreadPool(1);
-            orpansWatchDog.schedule(this::checkOrphan, 1, TimeUnit.SECONDS);
+            orpansWatchDog.scheduleWithFixedDelay(this::checkOrphan, 0, 1, TimeUnit.SECONDS);
         }
     }
     
@@ -83,137 +115,145 @@ public class JDBCConnectionPool {
             try {
                 c.getDelegate().close();
             } catch (SQLException e) {
-                System.out.println(e);
+                logger.log(Level.TRACE, ERROR_CLOSING_CONNECTION, e);
             }
         });
         pool.clear();
-        if (checkOrphans) {
+        if (config.detectOrphanConnections) {
             orpansWatchDog.shutdown();
+            checkedOut.forEach(o -> {
+                try {
+                    o.connection.getDelegate().close();
+                } catch (SQLException e) {
+                    logger.log(Level.TRACE, ERROR_CLOSING_CONNECTION, e);
+                }
+            });
         }
     }
     
-//    public Connection getConnection() throws SQLException {
-//        Connection result = Stream.generate(() -> 
-//            Try.of(this::getConnectionFromPool)
-//            .ifInterrupted()
-//            .optional())
-//        .limit(clientRetryOptions.numOfRetries) //Stream.generate().limit() emulates loop
-//        .flatMap(Optional::stream)              //Filter empty optional
-//        .findFirst()                            //stops on first connection
-//        .orElseThrow(() -> new SQLException(NO_AVAILABLE_CONNECTIONS));
-//        
-//        if (checkOrphans) {
-//            StackTraceElement[] stackTrace = Thread.currentThread().getStackTrace();
-//            orphaned.put(result, new Tuple<>(Instant.now(),stackTrace));
-//        }
-//        return result;
-//    }
-//
-//    public Connection getConnectionWithLoopAndTry() throws SQLException {
-//        for (long i = 0; i < clientRetryOptions.numOfRetries; i++) {
-//            Try<Connection> tried = Try.of(this::getConnectionFromPool)
-//                    .ifInterrupted()
-//                    .filter(Objects::nonNull);
-//            if (tried.isSuccess()) {
-//                return tried.optional().get();
-//            }
-//        }
-//        throw new SQLException(NO_AVAILABLE_CONNECTIONS);
-//    }
-//
-//    public Connection getConnectionWithLoopAndOptional() throws SQLException {
-//        for (long i = 0; i < clientRetryOptions.numOfRetries; i++) {
-//            var opt = Try.of(this::getConnectionFromPool)
-//                    .ifInterrupted()
-//                    .optional();
-//            if (opt.isPresent()) {
-//                return opt.get();
-//            }
-//        }
-//        throw new SQLException(NO_AVAILABLE_CONNECTIONS);
-//    }
-
+    @Override
     public Connection getConnection() throws SQLException {
-        return getConnectionTraditional();
+        return getConnection(config.clientTimeout);
     }
     
-    
-    public Connection getConnectionTraditional() throws SQLException {
-        for (long i = 0; i < clientRetryOptions.numOfRetries; i++) {
-            try {
-                Connection c = getConnectionFromPool();
-                if (c != null) {
-                    return c;
+    public Connection getConnection(Duration timeout) throws SQLException {
+        Instant startTime = Instant.now();
+        Duration remain = timeout;
+        while(!remain.isNegative()) {
+            PooledConnection con = getConnectionFromPool(timeout);
+            if (con != null) {
+                if (config.validateConnectionOnCheckout && !isValid(con, config.connectionValidationTimeout)) {
+                    handleInvalidConnection(con);
+                } else {
+                    if (config.detectOrphanConnections) {
+                        StackTraceElement[] stackTrace = Thread.currentThread().getStackTrace();
+                        checkedOut.add(new Orphanable(con, Instant.now(), config.orphanTimeout, stackTrace));
+                    }
+                    return con;
                 }
-            } catch (InterruptedException  ie) {
-                Thread.currentThread().interrupt();
-                throw new SQLException(ie);
-            } catch (SQLException e) {
-                // continue
             }
+            Duration elapsed = Duration.between(startTime, Instant.now());
+            remain = remain.minus(elapsed);
         }
         throw new SQLException(NO_AVAILABLE_CONNECTIONS);
     }
 
-    public CompletableFuture<Connection> getConnectionAsync() {
-        return Retry.of(this::getConnectionFromPool).retry();
-    }
-    
-    void checkOrphan() {
-        orphaned.forEachValue(0, p -> {
-            Duration d = Duration.between(p.inst(), Instant.now());
-            if (d.compareTo(orphanDuration) > 0) {
-                System.getLogger(JDBCConnectionPool.class.getName())
-                .log(Level.WARNING, "Orphaned connection detected");
-            }
-        });
+    public void configure(Consumer<Config> cnf) {
+        cnf.accept(config);
     }
 
-    private Connection getConnectionFromPool() throws InterruptedException, SQLException {
-        PooledConnection connection = pool.poll(clientRetryOptions.delay, clientRetryOptions.timeUnit);
-        if (connection != null && checkConnection) {
-            if (!connection.isValid(connectionValidationTimeOut)) {
-                handleInvalidConnection(connection);
-                connection = null;
-            }
+    public static boolean isValid(PooledConnection c, Duration timeout) {
+        boolean valid = false;
+        try {
+            valid = c.isValid((int)timeout.getSeconds());
+        } catch (SQLException e) {
+            //assume invalid
+        }
+        return valid;
+    }    
+
+    @Override
+    public java.util.logging.Logger getParentLogger() throws SQLFeatureNotSupportedException {
+        throw new SQLFeatureNotSupportedException();
+    }
+
+    @Override
+    public <T> T unwrap(Class<T> iface) throws SQLException {
+        throw new SQLException("Is not a wrapper for " + iface.getName());
+    }
+
+    @Override
+    public boolean isWrapperFor(Class<?> iface) throws SQLException {
+        return false;
+    }
+
+    @Override
+    public Connection getConnection(String username, String password) throws SQLException {
+        throw new SQLFeatureNotSupportedException();
+    }
+
+    @Override
+    public PrintWriter getLogWriter() throws SQLException {
+        return DriverManager.getLogWriter();
+    }
+
+    @Override
+    public void setLogWriter(PrintWriter out) throws SQLException {
+        DriverManager.setLogWriter(out);
+    }
+
+    @Override
+    public void setLoginTimeout(int seconds) throws SQLException {
+        DriverManager.setLoginTimeout(seconds);
+    }
+
+    @Override
+    public int getLoginTimeout() throws SQLException {
+        return DriverManager.getLoginTimeout();
+    }
+
+    private void checkOrphan() {
+        var stack = Optional.ofNullable(checkedOut.peek())
+        .map(Orphanable::stackTrace)
+        .stream()
+        .flatMap(Arrays::stream)
+        .map(Objects::toString)
+        .collect(Collectors.joining("\n"));
+
+        if (!stack.isEmpty()) {
+            logger.log(Level.WARNING, "Orphaned connection detected with stack:\n" + stack);
+        }
+    }
+    
+    private PooledConnection getConnectionFromPool(Duration timeout){
+        long millisTimeout = timeout.toMillis();
+        PooledConnection connection = null;
+        try {
+            connection = pool.poll(millisTimeout, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
         return connection;
     }
-    
-    private void handleInvalidConnection(Connection con) {
+
+    private void handleInvalidConnection(PooledConnection con) {
         try {
-            con.close();
+            con.getDelegate().close();
         } catch (SQLException e) {
-            System.out.println(e);
+            logger.log(Level.TRACE, ERROR_CLOSING_CONNECTION, e);
         }
         aquireDbConnection(dbUrl);
     }
 
     private void aquireDbConnection(String dbUrl) {
-        Duration dur = Duration.of(poolRetryOptions.delay, poolRetryOptions.timeUnit.toChronoUnit());
         Retry.of(() -> DriverManager.getConnection(dbUrl))
-        .withFixedDelay(dur)
-        .retry(poolRetryOptions.numOfRetries)
+        .withFixedDelay(config.retryDelay)
+        .retry(config.retryCount)
         .thenAccept(c -> pool.add(new PooledConnection(c)));
     }
 
     /**
-     * Retry options in terms of number of retries, delays and time units.
-     */
-    public static class RetryOptions {
-        final long numOfRetries;
-        final long delay;
-        final TimeUnit timeUnit;
-        
-        public RetryOptions(long num, long delay, TimeUnit unit) {
-            numOfRetries = num;
-            this.delay = delay;
-            timeUnit = unit;
-        }
-    }
-    
-    /**
-     * Wrapper class for physical DB connection.
+     * Wrapper class for the physical DB connection.
      * 
      * Delegates calls to the physical connection.
      * Overrides {@link #close()} method to return connection to the pool.
@@ -224,7 +264,7 @@ public class JDBCConnectionPool {
     class PooledConnection implements Connection {
         
         private final Connection delegate;
-
+        
         /**
          * Constructor
          * @param c physical DB connection
@@ -241,14 +281,17 @@ public class JDBCConnectionPool {
             return delegate;
         }
 
-        @Override
+        @SuppressWarnings("unchecked")
         public <T> T unwrap(Class<T> iface) throws SQLException {
-            return delegate.unwrap(iface);
+            if (isWrapperFor(iface)) {
+                return (T) delegate;
+            }
+            throw new SQLException("Not a wrapper for " + iface.getClass().getName());
         }
 
         @Override
         public boolean isWrapperFor(Class<?> iface) throws SQLException {
-            return delegate.isWrapperFor(iface);
+            return iface != null && iface.isAssignableFrom(delegate.getClass());
         }
 
         @Override
@@ -293,9 +336,9 @@ public class JDBCConnectionPool {
 
         @Override
         public void close() throws SQLException {
-            if (checkOrphans) {
-                var remove = orphaned.remove(this);
-                if (remove == null) {
+            if (config.detectOrphanConnections) {
+                var removed = checkedOut.removeIf(o ->  o.connection == this);
+                if (!removed) {
                     throw new IllegalStateException();
                 }
             }
@@ -521,7 +564,5 @@ public class JDBCConnectionPool {
         public int getNetworkTimeout() throws SQLException {
             return delegate.getNetworkTimeout();
         }
-        
     }
-    
 }
