@@ -22,9 +22,7 @@ import java.sql.Statement;
 import java.sql.Struct;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -38,12 +36,10 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
-import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import javax.sql.DataSource;
 
-import com.github.skopylov58.jdbc.pool.JDBCConnectionPool.Orphanable;
 import com.github.skopylov58.retry.Retry;
 
 public class JDBCConnectionPool implements DataSource {
