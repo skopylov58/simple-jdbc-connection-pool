@@ -51,7 +51,7 @@ By default `detectOrphanConnections` is set to `false`, do not use this feature 
 
 ### No extra threads
 
-During normal operation, pool does not use any additional threads - watchdogs, etc.
+During normal operation, pool does not consume any additional threads - watchdogs, etc.
 
 ## Performance benchmarking
 
