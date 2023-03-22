@@ -31,7 +31,15 @@ Yet another JDBC connection pool
 
 ### Fixed pools size
 
+Pool has fixed size which is specified `poolSize` configuration property.
+There are no any `minPoolSize` and `maxPoolSize` configuration properties. 
+This is subject of load balancing feature, not a pool itself. I suggest load balancing should be implemented (if any) in some another architectural level.
+
 ### Connection validation on checkout
+
+Connection pool uses `isValid(int timeout)` method of JDBC connection to validate connection on checkout. To enable validation, set configuration property `validateConnectionOnCheckout` to `true` and specify appropriate `connectionValidationTimeout` property.
+
+By default `validateConnectionOnCheckout` is set to `true`, but you can set it to `false` to improve total performance if you using some embedded or internal database with guaranteed connection.
 
 ### Orphan connection detection
 
@@ -43,6 +51,8 @@ By default `detectOrphanConnections` is set to `false`, do not use this feature 
 
 ### No extra threads
 
+During normal operation, pool does not use any additional threads - watchdogs, etc.
+
 ## Performance benchmarking
 
 I've compared this connection pool with latest well known c3p0 pool version 0.9.5.5
@@ -50,7 +60,6 @@ I've compared this connection pool with latest well known c3p0 pool version 0.9.
 Benchmark test uses pool size of 5 connections and 5, 10, 15 concurrently running clients. Each client checks out connections from the pool and immediately return it back repeating this 1_000_000 times. Benchmark source code could be found in the src/test directory
 
 Table below shows results in seconds.
-
 
 | Threads |  5   |  10  |  15  |
 |---------|------|------|------|
