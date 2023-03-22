@@ -42,59 +42,36 @@ import javax.sql.DataSource;
 
 import com.github.skopylov58.retry.Retry;
 
-public class JDBCConnectionPool implements DataSource {
+/**
+ * Simple JDBC Connection pool.
+ * @author skopylov
+ *
+ */
+public class SimpleJDBCConnectionPool implements DataSource {
     
     private static final String ERROR_CLOSING_CONNECTION = "Error closing connection";
     private static final String NO_AVAILABLE_CONNECTIONS = "There are no available connections in the pool";
     
-    private static final Logger logger = System.getLogger(JDBCConnectionPool.class.getName());
+    private static final Logger logger = System.getLogger(SimpleJDBCConnectionPool.class.getName());
 
-    //Pool configuration parameters
-    public static class Config {
-        public int poolSize = 10;
-        
-        public int retryCount = 10;
-        public Duration retryDelay = Duration.ofSeconds(1);
-        
-        public  Duration clientTimeout = Duration.ofSeconds(10);
-        
-        public boolean validateConnectionOnCheckout = true;
-        public Duration connectionValidationTimeout = Duration.ofSeconds(10);
-
-        public boolean detectOrphanConnections = false;
-        public Duration orphanTimeout = Duration.ofSeconds(30);
-    }
-    
     private final String dbUrl;
     private final Config config = new Config();
     
     private BlockingQueue<PooledConnection> pool = new LinkedBlockingQueue<>();
     private DelayQueue<Orphanable> checkedOut;
     private ScheduledExecutorService orpansWatchDog;
-    
-    public JDBCConnectionPool(String url) {
+
+    /**
+     * Constructor.
+     * @param url URL to the database.
+     */
+    public SimpleJDBCConnectionPool(String url) {
         dbUrl = url;
     }
 
-    record Orphanable(PooledConnection connection,
-               Instant checkedOut,
-               Duration timeout,
-               StackTraceElement[] stackTrace)
-    implements Delayed
-    {
-        @Override
-        public int compareTo(Delayed other) {
-            return (this == other) ? 0 :
-            Long.compare(getDelay(TimeUnit.MICROSECONDS),other.getDelay(TimeUnit.MICROSECONDS));
-        }
-
-        @Override
-        public long getDelay(TimeUnit unit) {
-            var elapsed = Duration.between(checkedOut, Instant.now());
-            return unit.convert(timeout.minus(elapsed));
-        }
-    }
-
+    /**
+     * Starts connection pool.
+     */
     public void start() {
         for (int i = 0; i < config.poolSize; i++) {
             aquireDbConnection(dbUrl);
@@ -106,6 +83,9 @@ public class JDBCConnectionPool implements DataSource {
         }
     }
     
+    /**
+     * Stops connection pool.
+     */
     public void stop() {
         pool.forEach(c -> {
             try {
@@ -163,10 +143,54 @@ public class JDBCConnectionPool implements DataSource {
         try {
             valid = c.isValid((int)timeout.getSeconds());
         } catch (SQLException e) {
-            //assume invalid
+            logger.log(Level.TRACE, "Error validating connection", e);
         }
         return valid;
     }    
+
+    /**
+     * Checks if there are any orphan connections and 
+     * prints stack trace to the system logger with WARNING level.
+     */
+    private void checkOrphan() {
+        var stack = Optional.ofNullable(checkedOut.peek())
+        .map(Orphanable::stackTrace)
+        .stream()
+        .flatMap(Arrays::stream)
+        .map(Objects::toString)
+        .collect(Collectors.joining("\n"));
+
+        if (!stack.isEmpty()) {
+            logger.log(Level.WARNING, "Orphaned connection detected with stack:\n" + stack);
+        }
+    }
+    
+    private PooledConnection getConnectionFromPool(Duration timeout){
+        long millisTimeout = timeout.toMillis();
+        PooledConnection connection = null;
+        try {
+            connection = pool.poll(millisTimeout, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        return connection;
+    }
+
+    private void handleInvalidConnection(PooledConnection con) {
+        try {
+            con.getDelegate().close();
+        } catch (SQLException e) {
+            logger.log(Level.TRACE, ERROR_CLOSING_CONNECTION, e);
+        }
+        aquireDbConnection(dbUrl);
+    }
+
+    private void aquireDbConnection(String dbUrl) {
+        Retry.of(() -> DriverManager.getConnection(dbUrl))
+        .withFixedDelay(config.retryDelay)
+        .retry(config.retryCount)
+        .thenAccept(c -> pool.add(new PooledConnection(c)));
+    }
 
     @Override
     public java.util.logging.Logger getParentLogger() throws SQLFeatureNotSupportedException {
@@ -208,46 +232,45 @@ public class JDBCConnectionPool implements DataSource {
         return DriverManager.getLoginTimeout();
     }
 
-    private void checkOrphan() {
-        var stack = Optional.ofNullable(checkedOut.peek())
-        .map(Orphanable::stackTrace)
-        .stream()
-        .flatMap(Arrays::stream)
-        .map(Objects::toString)
-        .collect(Collectors.joining("\n"));
+    /**
+     * Pool configuration parameters
+     */
+    public static class Config {
+        public int poolSize = 10;
+        
+        public int retryCount = 10;
+        public Duration retryDelay = Duration.ofSeconds(1);
+        
+        public  Duration clientTimeout = Duration.ofSeconds(10);
+        
+        public boolean validateConnectionOnCheckout = true;
+        public Duration connectionValidationTimeout = Duration.ofSeconds(10);
 
-        if (!stack.isEmpty()) {
-            logger.log(Level.WARNING, "Orphaned connection detected with stack:\n" + stack);
+        public boolean detectOrphanConnections = false;
+        public Duration orphanTimeout = Duration.ofSeconds(30);
+    }
+
+    /**
+     * Potentially orphaned connections. 
+     */
+    record Orphanable(PooledConnection connection, 
+            Instant checkedOut,
+            Duration timeout,
+            StackTraceElement[] stackTrace)
+            implements Delayed {
+        @Override
+        public int compareTo(Delayed other) {
+            return (this == other) ? 0
+                    : Long.compare(getDelay(TimeUnit.MICROSECONDS), other.getDelay(TimeUnit.MICROSECONDS));
+        }
+
+        @Override
+        public long getDelay(TimeUnit unit) {
+            var elapsed = Duration.between(checkedOut, Instant.now());
+            return unit.convert(timeout.minus(elapsed));
         }
     }
     
-    private PooledConnection getConnectionFromPool(Duration timeout){
-        long millisTimeout = timeout.toMillis();
-        PooledConnection connection = null;
-        try {
-            connection = pool.poll(millisTimeout, TimeUnit.MILLISECONDS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
-        return connection;
-    }
-
-    private void handleInvalidConnection(PooledConnection con) {
-        try {
-            con.getDelegate().close();
-        } catch (SQLException e) {
-            logger.log(Level.TRACE, ERROR_CLOSING_CONNECTION, e);
-        }
-        aquireDbConnection(dbUrl);
-    }
-
-    private void aquireDbConnection(String dbUrl) {
-        Retry.of(() -> DriverManager.getConnection(dbUrl))
-        .withFixedDelay(config.retryDelay)
-        .retry(config.retryCount)
-        .thenAccept(c -> pool.add(new PooledConnection(c)));
-    }
-
     /**
      * Wrapper class for the physical DB connection.
      * 
