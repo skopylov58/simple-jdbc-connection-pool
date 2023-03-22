@@ -19,7 +19,7 @@ public class BenchmarkTest {
 
     @Test
     public void testMy() throws Exception {
-        JDBCConnectionPool pool = new JDBCConnectionPool(H2);
+        SimpleJDBCConnectionPool pool = new SimpleJDBCConnectionPool(H2);
         pool.configure(c -> {
             c.poolSize = 5;
             c.validateConnectionOnCheckout = false;

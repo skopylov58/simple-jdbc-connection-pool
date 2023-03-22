@@ -14,7 +14,7 @@ public class JdbcConnectionPoolTest {
     
     @Test
     public void test0() throws Exception {
-        JDBCConnectionPool pool = new JDBCConnectionPool(h2);
+        SimpleJDBCConnectionPool pool = new SimpleJDBCConnectionPool(h2);
         pool.start();
         Connection connection = pool.getConnection();
         assertNotNull(connection);
@@ -24,7 +24,7 @@ public class JdbcConnectionPoolTest {
 
     @Test
     public void test1() throws Exception {
-        JDBCConnectionPool pool = new JDBCConnectionPool(h2);
+        SimpleJDBCConnectionPool pool = new SimpleJDBCConnectionPool(h2);
         pool.configure(c -> c.poolSize = 2);
         pool.start();
         
@@ -49,7 +49,7 @@ public class JdbcConnectionPoolTest {
     
     @Test
     public void testWrapper() throws Exception {
-        JDBCConnectionPool pool = new JDBCConnectionPool(h2);
+        SimpleJDBCConnectionPool pool = new SimpleJDBCConnectionPool(h2);
         pool.start();
         Connection connection = pool.getConnection();
         Connection unwraped = connection.unwrap(Connection.class);
@@ -60,7 +60,7 @@ public class JdbcConnectionPoolTest {
     
     @Test
     public void testOrphan() throws Exception {
-        JDBCConnectionPool pool = new JDBCConnectionPool(h2);
+        SimpleJDBCConnectionPool pool = new SimpleJDBCConnectionPool(h2);
         pool.configure(c -> {
             c.detectOrphanConnections = true;
             c.orphanTimeout = Duration.ofSeconds(1);
@@ -73,7 +73,7 @@ public class JdbcConnectionPoolTest {
     }
     
     public void usage() {
-        JDBCConnectionPool pool = new JDBCConnectionPool("jdbc:mysql:///");
+        SimpleJDBCConnectionPool pool = new SimpleJDBCConnectionPool("jdbc:mysql:///");
         pool.configure(c -> {
             c.poolSize = 10;
             c.clientTimeout = Duration.ofSeconds(30);
