@@ -1,5 +1,5 @@
 # simple-jdbc-connection-pool
-Yet another JDBC connection pool
+Yet another JDBC connection pool - simple, concise, performant, reliable, single file source code.
 
 ## Usage
 

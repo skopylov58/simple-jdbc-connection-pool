@@ -44,7 +44,7 @@ import com.github.skopylov58.retry.Retry;
 
 /**
  * Simple JDBC Connection pool.
- * @author skopylov
+ * @author skopylov@gmail.com
  *
  */
 public class SimpleJDBCConnectionPool implements DataSource {
@@ -58,7 +58,7 @@ public class SimpleJDBCConnectionPool implements DataSource {
     private final Config config = new Config();
     
     private BlockingQueue<PooledConnection> pool = new LinkedBlockingQueue<>();
-    private DelayQueue<Orphanable> checkedOut;
+    private DelayQueue<Orphanable> checkedOut;  //for orphaned connections
     private ScheduledExecutorService orpansWatchDog;
 
     /**
@@ -74,7 +74,7 @@ public class SimpleJDBCConnectionPool implements DataSource {
      */
     public void start() {
         for (int i = 0; i < config.poolSize; i++) {
-            aquireDbConnection(dbUrl);
+            acquireDbConnection(dbUrl);
         }
         if (config.detectOrphanConnections) {
             checkedOut = new DelayQueue<>();
@@ -111,7 +111,13 @@ public class SimpleJDBCConnectionPool implements DataSource {
     public Connection getConnection() throws SQLException {
         return getConnection(config.clientTimeout);
     }
-    
+
+    /**
+     * Gets connection from the pool.
+     * @param timeout 
+     * @return pooled connection
+     * @throws SQLException if connection can not be acquired during specified timeout.
+     */
     public Connection getConnection(Duration timeout) throws SQLException {
         Instant startTime = Instant.now();
         Duration remain = timeout;
@@ -134,10 +140,20 @@ public class SimpleJDBCConnectionPool implements DataSource {
         throw new SQLException(NO_AVAILABLE_CONNECTIONS);
     }
 
+    /**
+     * Configures the pool.
+     * @param cnf user supplied configurator 
+     */
     public void configure(Consumer<Config> cnf) {
         cnf.accept(config);
     }
 
+    /**
+     * Checks connection validity.
+     * @param c connection to validate
+     * @param timeout validation timeout
+     * @return true if connection is valid, otherwise - false
+     */
     public static boolean isValid(PooledConnection c, Duration timeout) {
         boolean valid = false;
         try {
@@ -165,6 +181,11 @@ public class SimpleJDBCConnectionPool implements DataSource {
         }
     }
     
+    /**
+     * Gets connection from internal pool
+     * @param timeout
+     * @return connection or null if there are no available connections
+     */
     private PooledConnection getConnectionFromPool(Duration timeout){
         long millisTimeout = timeout.toMillis();
         PooledConnection connection = null;
@@ -176,16 +197,24 @@ public class SimpleJDBCConnectionPool implements DataSource {
         return connection;
     }
 
+    /**
+     * Closes invalid connection and acquires a new one from external database. 
+     * @param con connection to close
+     */
     private void handleInvalidConnection(PooledConnection con) {
         try {
             con.getDelegate().close();
         } catch (SQLException e) {
             logger.log(Level.TRACE, ERROR_CLOSING_CONNECTION, e);
         }
-        aquireDbConnection(dbUrl);
+        acquireDbConnection(dbUrl);
     }
 
-    private void aquireDbConnection(String dbUrl) {
+    /**
+     * Acquires connection asynchronously from external database.
+     * @param dbUrl external database URL
+     */
+    private void acquireDbConnection(String dbUrl) {
         Retry.of(() -> DriverManager.getConnection(dbUrl))
         .withFixedDelay(config.retryDelay)
         .retry(config.retryCount)
