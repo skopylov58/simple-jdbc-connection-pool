@@ -14,7 +14,7 @@ Yet another JDBC connection pool
 ## Usage
 
 ```java
-        JDBCConnectionPool pool = new JDBCConnectionPool("jdbc:mysql:///");
+        SimpleJDBCConnectionPool pool = new SimpleJDBCConnectionPool("jdbc:mysql:///");
         pool.configure(c -> {
             c.poolSize = 10;
             c.clientTimeout = Duration.ofSeconds(30);
