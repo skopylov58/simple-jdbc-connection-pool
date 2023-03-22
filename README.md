@@ -1,16 +1,6 @@
 # simple-jdbc-connection-pool
 Yet another JDBC connection pool
 
-## Design decisions
-
-### Fixed pools size
-
-### Connection validation on checkout
-
-### Orphan connection detection
-
-### No extra threads
-
 ## Usage
 
 ```java
@@ -36,6 +26,23 @@ Yet another JDBC connection pool
         //...
         pool.stop();
 ```
+
+## Design decisions
+
+### Fixed pools size
+
+### Connection validation on checkout
+
+### Orphan connection detection
+
+If you did not close connection for any reason, it will not be returned to the pool and becomes orphan (or leaked). So the detection of orphan connections is very important feature of the connection pool.
+
+To enable orphan connection detection, set pool configuration property `detectOrphanConnections` to true, and specify appropriate `orphanTimeout` property. If connection will not be returned to the pool after this timeout, then log message will be printed to the system logger on WARNING level with stack trace including place from where connection was checked out.
+
+By default `detectOrphanConnections` is set to `false`, do not use this feature on the production, use it if only for debugging or troubleshooting of your app.
+
+### No extra threads
+
 ## Performance benchmarking
 
 I've compared this connection pool with latest well known c3p0 pool version 0.9.5.5
