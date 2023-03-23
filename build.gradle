@@ -6,7 +6,15 @@ plugins {
 
 repositories {
     mavenCentral()
-    mavenLocal()
+
+    maven {
+        url = uri("https://maven.pkg.github.com/skopylov58/java-async-retry")
+        credentials {
+            username = 'skopylov58'
+            password = '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'
+        }
+    }
+
 }
 
 dependencies {
@@ -15,3 +23,6 @@ dependencies {
     testImplementation group: 'com.h2database', name: 'h2', version: '2.1.210'
     testImplementation group: 'com.mchange', name: 'c3p0', version: '0.9.5.5'
 }
+
+
+//
