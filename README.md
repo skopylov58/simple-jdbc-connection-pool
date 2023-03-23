@@ -1,3 +1,5 @@
+![example workflow](https://github.com/skopylov58/simple-jdbc-connection-pool/actions/workflows/gradle.yml/badge.svg)
+
 # simple-jdbc-connection-pool
 Yet another JDBC connection pool - simple, concise, performant, reliable, single file source code.
 
