@@ -10,8 +10,8 @@ repositories {
     maven {
         url = uri("https://maven.pkg.github.com/skopylov58/java-async-retry")
         credentials {
-            username = project.findProperty("github.user") ?: System.getenv("USERNAME")
-            password = project.findProperty("github.password") ?: System.getenv("TOKEN")
+            username = project.findProperty("github.user") ?: System.getenv("GITHUB_ACTOR")
+            password = project.findProperty("github.password") ?: System.getenv("GITHUB_TOKEN")
         }
     }
 
