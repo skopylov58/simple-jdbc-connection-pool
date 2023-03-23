@@ -18,7 +18,7 @@ public class BenchmarkTest {
     final String H2 = "jdbc:h2:mem:test_mem";
 
     @Test
-    public void testMy() throws Exception {
+    public void testSimple() throws Exception {
         SimpleJDBCConnectionPool pool = new SimpleJDBCConnectionPool(H2);
         pool.configure(c -> {
             c.poolSize = 5;
@@ -26,7 +26,7 @@ public class BenchmarkTest {
         });
         pool.start();
         
-        foo("My", pool);
+        foo("simple", pool);
         pool.stop();
     }
     
@@ -45,7 +45,7 @@ public class BenchmarkTest {
         System.out.println("Running bench for pool " + poolName);
         int [] numOfThreads = new int[] {5, 10, 15};
         for (int i = 0; i < numOfThreads.length; i++) {
-            Duration duration = bench(ds, numOfThreads[i], 1_000_000);
+            Duration duration = bench(ds, numOfThreads[i], 1_000);
             System.out.println("Num of threads " + numOfThreads[i] + " duration=" + duration);
         }
         System.out.println("Finished bench for pool " + poolName);

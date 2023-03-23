@@ -6,9 +6,11 @@ plugins {
 
 repositories {
     mavenCentral()
+    mavenLocal()
 }
 
 dependencies {
+    implementation 'com.github.skopylov58:java-async-retry:0.1.0'
     testImplementation 'junit:junit:4.12'
     testImplementation group: 'com.h2database', name: 'h2', version: '2.1.210'
     testImplementation group: 'com.mchange', name: 'c3p0', version: '0.9.5.5'
